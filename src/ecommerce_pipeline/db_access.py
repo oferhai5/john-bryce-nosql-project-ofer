@@ -78,6 +78,7 @@ class DBAccess:
 
             order_items_response: list[OrderItemResponse] = []
             total_amount = Decimal("0")
+            inventory_updates: list[tuple[int, int]] = []
 
             try:
                 order = Order(customer_id=customer_id_val, status="completed")
@@ -91,6 +92,7 @@ class DBAccess:
                         raise ValueError(f"Insufficient stock for product {product.id}")
 
                     product.stock_quantity -= req.quantity
+                    inventory_updates.append((product.id, req.quantity))
 
                     line_unit_price = Decimal(str(product.price))
                     line_total = line_unit_price * req.quantity
@@ -125,6 +127,11 @@ class DBAccess:
                 session.rollback()
                 raise
 
+        if self._redis:
+            for product_id, quantity in inventory_updates:
+                self._redis.decrby(f"inventory:{product_id}", quantity)
+
+
         customer_embed = OrderCustomerEmbed(
             id=customer_id_val,
             name=customer_name,
@@ -153,10 +160,29 @@ class DBAccess:
         )
 
     def get_product(self, product_id: int) -> ProductResponse | None:
+        cache_key = f"product:{product_id}"
+
+        if self._redis:
+            cached = self._redis.get(cache_key)
+            if cached:
+                import json
+                return ProductResponse(**json.loads(cached))
+
         doc = self._mongo_db["product_catalog"].find_one({"id": product_id})
         if not doc:
             return None
-        return self._product_doc_to_response(doc)
+
+        product = self._product_doc_to_response(doc)
+
+        if self._redis:
+            import json
+            self._redis.setex(
+                cache_key,
+                60,
+                json.dumps(product.model_dump()),
+            )
+
+        return product
 
     def search_products(
         self,
@@ -234,14 +260,34 @@ class DBAccess:
     # ── Phase 2 ───────────────────────────────────────────────────────────────
 
     def invalidate_product_cache(self, product_id: int) -> None:
-        raise NotImplementedError("Phase 2: implement invalidate_product_cache")
+        if not self._redis:
+            return
+
+        key = f"product:{product_id}"
+        self._redis.delete(key)
 
     def record_product_view(self, customer_id: int, product_id: int) -> None:
-        raise NotImplementedError("Phase 2: implement record_product_view")
+        if not self._redis:
+            return
+
+        key = f"recently_viewed:{customer_id}"
+
+        # הכנס לראש הרשימה (המוצר האחרון ראשון)
+        self._redis.lpush(key, product_id)
+
+        # שמור רק 10 מוצרים אחרונים
+        self._redis.ltrim(key, 0, 9)
 
     def get_recently_viewed(self, customer_id: int) -> list[int]:
-        raise NotImplementedError("Phase 2: implement get_recently_viewed")
+        if not self._redis:
+            return []
 
+        key = f"recently_viewed:{customer_id}"
+        product_ids = self._redis.lrange(key, 0, -1)
+
+        # המרה ל-int
+        return [int(pid) for pid in product_ids]
+        
     # ── Phase 3 ───────────────────────────────────────────────────────────────
 
     def get_recommendations(self, product_id: int, limit: int = 5) -> list[RecommendationResponse]:

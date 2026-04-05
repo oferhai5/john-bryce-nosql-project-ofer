@@ -16,14 +16,13 @@ Seed data files are in the seed_data/ directory.
 """
 
 import os
-
 import json
-from sqlalchemy.orm import Session
-from ecommerce_pipeline.postgres_models import Customer, Product
-
 from pathlib import Path
 
 from dotenv import load_dotenv
+from sqlalchemy.orm import Session
+
+from ecommerce_pipeline.postgres_models import Customer, Product
 
 load_dotenv()
 
@@ -46,10 +45,10 @@ def seed(engine, mongo_db, redis_client=None, neo4j_driver=None):
         customers = json.load(open(SEED_DIR / "customers.json"))
         historical_orders = json.load(open(SEED_DIR / "historical_orders.json"))
     """
-    with Session(engine) as session:
-        customers = json.load(open(SEED_DIR / "customers.json"))
-        products = json.load(open(SEED_DIR / "products.json"))
+    customers = json.load(open(SEED_DIR / "customers.json"))
+    products = json.load(open(SEED_DIR / "products.json"))
 
+    with Session(engine) as session:
         for c in customers:
             session.add(
                 Customer(
@@ -76,6 +75,9 @@ def seed(engine, mongo_db, redis_client=None, neo4j_driver=None):
     mongo_db["product_catalog"].delete_many({})
     mongo_db["product_catalog"].insert_many(products)
 
+    if redis_client:
+        for p in products:
+            redis_client.set(f"inventory:{p['id']}", p["stock_quantity"])
 
 
 # ---------------------------------------------------------------------------
