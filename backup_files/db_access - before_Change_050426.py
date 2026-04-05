@@ -64,12 +64,12 @@ class DBAccess:
             if customer is None:
                 raise ValueError(f"Customer {customer_id} not found")
 
-            customer_id_val = customer.id
-            customer_name = customer.name
-            customer_email = customer.email
-
             requested_ids = [item.product_id for item in items]
-            products = session.query(Product).filter(Product.id.in_(requested_ids)).all()
+            products = (
+                session.query(Product)
+                .filter(Product.id.in_(requested_ids))
+                .all()
+            )
             product_map = {p.id: p for p in products}
 
             if len(product_map) != len(set(requested_ids)):
@@ -80,9 +80,9 @@ class DBAccess:
             total_amount = Decimal("0")
 
             try:
-                order = Order(customer_id=customer_id_val, status="completed")
+                order = Order(customer_id=customer.id, status="completed")
                 session.add(order)
-                session.flush()
+                session.flush()  # get order.id
 
                 for req in items:
                     product = product_map[req.product_id]
@@ -117,36 +117,34 @@ class DBAccess:
                 session.commit()
                 session.refresh(order)
 
-                order_id_val = order.id
-                order_status_val = order.status
-                created_at_str = order.created_at.isoformat()
-
             except Exception:
                 session.rollback()
                 raise
 
+        created_at_str = order.created_at.isoformat()
+
         customer_embed = OrderCustomerEmbed(
-            id=customer_id_val,
-            name=customer_name,
-            email=customer_email,
+            id=customer.id,
+            name=customer.name,
+            email=customer.email,
         )
 
         try:
             self.save_order_snapshot(
-                order_id=order_id_val,
+                order_id=order.id,
                 customer=customer_embed,
                 items=order_items_response,
                 total_amount=float(total_amount),
-                status=order_status_val,
+                status=order.status,
                 created_at=created_at_str,
             )
         except Exception:
-            logger.exception("Failed to save order snapshot for order_id=%s", order_id_val)
+            logger.exception("Failed to save order snapshot for order_id=%s", order.id)
 
         return OrderResponse(
-            order_id=order_id_val,
-            customer_id=customer_id_val,
-            status=order_status_val,
+            order_id=order.id,
+            customer_id=customer.id,
+            status=order.status,
             total_amount=float(total_amount),
             created_at=created_at_str,
             items=order_items_response,

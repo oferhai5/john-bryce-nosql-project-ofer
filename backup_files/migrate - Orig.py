@@ -1,14 +1,15 @@
 """
-Full setup: reset + migrate + seed in one command.
+Database migration script.
+
+Drops and recreates all database structures, then runs your migration logic.
 
 Usage:
-    uv run python -m scripts.setup
-
-This is a convenience wrapper. It is equivalent to running:
     uv run python -m scripts.migrate
-    uv run python -m scripts.seed
 
-Provided infrastructure — students should not modify this file.
+What to implement in migrate():
+    Phase 1: Create Postgres tables (Base.metadata.create_all) + MongoDB indexes
+    Phase 2: No structural migration needed for Redis
+    Phase 3: Neo4j uniqueness constraints
 """
 
 import os
@@ -17,6 +18,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def migrate(engine, mongo_db, redis_client=None, neo4j_driver=None):
+    """Create all database tables, indexes, and constraints.
+
+    This function is called after reset_all() has wiped everything.
+    Add your creation logic here incrementally as you progress through phases.
+
+    Args:
+        engine: SQLAlchemy engine connected to Postgres
+        mongo_db: pymongo Database instance
+        redis_client: redis.Redis instance or None (Phase 2+)
+        neo4j_driver: neo4j.Driver instance or None (Phase 3)
+    """
+    pass  # TODO: Phase 1 — create Postgres tables and MongoDB indexes
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
 
 def _pg_url() -> str:
     host = os.environ.get("POSTGRES_HOST", "localhost")
@@ -62,25 +82,19 @@ def main():
     from sqlalchemy import create_engine
 
     from ecommerce_pipeline.reset import reset_all
-    from scripts.migrate import migrate
-    from scripts.seed import seed
 
     engine = create_engine(_pg_url(), echo=False)
     mongo_db = _mongo_db()
     redis_client = _redis_client()
     neo4j_driver = _neo4j_driver()
 
-    print("Step 1/3: Resetting all databases...")
+    print("Resetting all databases...")
     reset_all(engine, mongo_db, redis_client, neo4j_driver)
 
-    print("Step 2/3: Running migration...")
+    print("Running migration...")
     migrate(engine, mongo_db, redis_client, neo4j_driver)
 
-    print("Step 3/3: Seeding data...")
-    seed(engine, mongo_db, redis_client, neo4j_driver)
-
-    print("\nDone! Start the API with:")
-    print("  uv run uvicorn ecommerce_pipeline.api.app:app --reload")
+    print("Migration complete.")
 
     if neo4j_driver:
         neo4j_driver.close()

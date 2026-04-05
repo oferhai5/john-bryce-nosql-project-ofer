@@ -14,15 +14,19 @@ What to implement in migrate():
 
 import os
 
+from ecommerce_pipeline.postgres_models import Base
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
+
+
 def migrate(engine, mongo_db, redis_client=None, neo4j_driver=None):
     """Create all database tables, indexes, and constraints.
 
-    This function is called after reset_all() has wiped everything.
+      This function is called after reset_all() has wiped everything.
     Add your creation logic here incrementally as you progress through phases.
 
     Args:
@@ -31,7 +35,31 @@ def migrate(engine, mongo_db, redis_client=None, neo4j_driver=None):
         redis_client: redis.Redis instance or None (Phase 2+)
         neo4j_driver: neo4j.Driver instance or None (Phase 3)
     """
-    pass  # TODO: Phase 1 — create Postgres tables and MongoDB indexes
+
+
+    # Phase 1: PostgreSQL tables
+    Base.metadata.create_all(engine)
+
+    # Phase 1: MongoDB indexes
+    mongo_db["product_catalog"].create_index("id", unique=True)
+    mongo_db["product_catalog"].create_index("category")
+    mongo_db["product_catalog"].create_index("name")
+
+    mongo_db["order_snapshots"].create_index("order_id", unique=True)
+    mongo_db["order_snapshots"].create_index("customer.id")
+    mongo_db["order_snapshots"].create_index("created_at")
+
+    # Phase 3: Neo4j constraint
+    if neo4j_driver is not None:
+        with neo4j_driver.session() as session:
+            session.run(
+                "CREATE CONSTRAINT product_id_unique IF NOT EXISTS "
+                "FOR (p:Product) REQUIRE p.id IS UNIQUE"
+            )
+
+
+
+
 
 
 # ---------------------------------------------------------------------------

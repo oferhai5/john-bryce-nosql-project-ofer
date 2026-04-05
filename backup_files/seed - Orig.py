@@ -1,22 +1,52 @@
 """
-Full setup: reset + migrate + seed in one command.
+Seed script — loads data into all databases.
 
 Usage:
-    uv run python -m scripts.setup
-
-This is a convenience wrapper. It is equivalent to running:
-    uv run python -m scripts.migrate
     uv run python -m scripts.seed
 
-Provided infrastructure — students should not modify this file.
+Prerequisites:
+    Run scripts.migrate first to create database structures.
+
+What to implement in seed():
+    Phase 1: Load products.json + customers.json into Postgres and MongoDB
+    Phase 2: Initialize Redis inventory counters from Postgres product stock
+    Phase 3: Build Neo4j co-purchase graph from historical_orders.json
+
+Seed data files are in the seed_data/ directory.
 """
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
+SEED_DIR = Path(__file__).parent.parent / "seed_data"
+
+
+def seed(engine, mongo_db, redis_client=None, neo4j_driver=None):
+    """Load seed data into all databases.
+
+    Add your seeding logic here incrementally as you progress through phases.
+
+    Args:
+        engine: SQLAlchemy engine connected to Postgres
+        mongo_db: pymongo Database instance
+        redis_client: redis.Redis instance or None (Phase 2+)
+        neo4j_driver: neo4j.Driver instance or None (Phase 3)
+
+    Tip: Use json.load() to read the files in seed_data/:
+        products = json.load(open(SEED_DIR / "products.json"))
+        customers = json.load(open(SEED_DIR / "customers.json"))
+        historical_orders = json.load(open(SEED_DIR / "historical_orders.json"))
+    """
+    pass  # TODO: Phase 1 — load products and customers into Postgres + MongoDB
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
 
 def _pg_url() -> str:
     host = os.environ.get("POSTGRES_HOST", "localhost")
@@ -61,26 +91,14 @@ def _neo4j_driver():
 def main():
     from sqlalchemy import create_engine
 
-    from ecommerce_pipeline.reset import reset_all
-    from scripts.migrate import migrate
-    from scripts.seed import seed
-
     engine = create_engine(_pg_url(), echo=False)
     mongo_db = _mongo_db()
     redis_client = _redis_client()
     neo4j_driver = _neo4j_driver()
 
-    print("Step 1/3: Resetting all databases...")
-    reset_all(engine, mongo_db, redis_client, neo4j_driver)
-
-    print("Step 2/3: Running migration...")
-    migrate(engine, mongo_db, redis_client, neo4j_driver)
-
-    print("Step 3/3: Seeding data...")
+    print("Seeding databases...")
     seed(engine, mongo_db, redis_client, neo4j_driver)
-
-    print("\nDone! Start the API with:")
-    print("  uv run uvicorn ecommerce_pipeline.api.app:app --reload")
+    print("Seeding complete.")
 
     if neo4j_driver:
         neo4j_driver.close()
