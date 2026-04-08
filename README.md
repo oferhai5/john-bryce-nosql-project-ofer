@@ -16,12 +16,12 @@ uv sync
 uv run python -m scripts.migrate
 uv run python -m scripts.seed
 uv run pytest
+```
 
 # E-Commerce Polyglot Data Pipeline
 
 The web API is fully wired up and running. **Your job is to implement the data access layer** -- the `DBAccess` class in `src/ecommerce_pipeline/db_access.py`.
 
----
 
 
 
