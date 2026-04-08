@@ -17,6 +17,7 @@ Seed data files are in the seed_data/ directory.
 
 import os
 import json
+from itertools import combinations
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -44,9 +45,11 @@ def seed(engine, mongo_db, redis_client=None, neo4j_driver=None):
         products = json.load(open(SEED_DIR / "products.json"))
         customers = json.load(open(SEED_DIR / "customers.json"))
         historical_orders = json.load(open(SEED_DIR / "historical_orders.json"))
+
     """
     customers = json.load(open(SEED_DIR / "customers.json"))
     products = json.load(open(SEED_DIR / "products.json"))
+    historical_orders = json.load(open(SEED_DIR / "historical_orders.json"))
 
     with Session(engine) as session:
         for c in customers:
@@ -78,6 +81,30 @@ def seed(engine, mongo_db, redis_client=None, neo4j_driver=None):
     if redis_client:
         for p in products:
             redis_client.set(f"inventory:{p['id']}", p["stock_quantity"])
+
+
+    if neo4j_driver:
+        with neo4j_driver.session() as neo_session:
+            for order in historical_orders:
+                product_ids = sorted(set(order["product_ids"]))
+
+                for p1, p2 in combinations(product_ids, 2):
+                    neo_session.run(
+                        """
+                        MERGE (a:Product {id: $p1})
+                        MERGE (b:Product {id: $p2})
+                        MERGE (a)-[r:BOUGHT_WITH]->(b)
+                        ON CREATE SET r.count = 1
+                        ON MATCH SET r.count = r.count + 1
+                        MERGE (b)-[r2:BOUGHT_WITH]->(a)
+                        ON CREATE SET r2.count = 1
+                        ON MATCH SET r2.count = r2.count + 1
+                        """,
+                        p1=p1,
+                        p2=p2,
+                    )
+
+
 
 
 # ---------------------------------------------------------------------------

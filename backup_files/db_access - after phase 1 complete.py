@@ -1,12 +1,7 @@
 from __future__ import annotations
 
-from sqlalchemy import select
-from ecommerce_pipeline.postgres_models import Product
-from ecommerce_pipeline.models.responses import RecommendationResponse
-
 import logging
 from decimal import Decimal
-from itertools import combinations
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
@@ -83,7 +78,6 @@ class DBAccess:
 
             order_items_response: list[OrderItemResponse] = []
             total_amount = Decimal("0")
-            inventory_updates: list[tuple[int, int]] = []
 
             try:
                 order = Order(customer_id=customer_id_val, status="completed")
@@ -97,7 +91,6 @@ class DBAccess:
                         raise ValueError(f"Insufficient stock for product {product.id}")
 
                     product.stock_quantity -= req.quantity
-                    inventory_updates.append((product.id, req.quantity))
 
                     line_unit_price = Decimal(str(product.price))
                     line_total = line_unit_price * req.quantity
@@ -132,11 +125,6 @@ class DBAccess:
                 session.rollback()
                 raise
 
-        if self._redis:
-            for product_id, quantity in inventory_updates:
-                self._redis.decrby(f"inventory:{product_id}", quantity)
-
-
         customer_embed = OrderCustomerEmbed(
             id=customer_id_val,
             name=customer_name,
@@ -155,28 +143,6 @@ class DBAccess:
         except Exception:
             logger.exception("Failed to save order snapshot for order_id=%s", order_id_val)
 
-        if self._neo4j is not None:
-            product_ids = [item.product_id for item in items]
-
-            with self._neo4j.session() as neo_session:
-                for i, source_id in enumerate(product_ids):
-                    for j, target_id in enumerate(product_ids):
-                        if i == j:
-                            continue
-
-                        neo_session.run(
-                            """
-                            MERGE (a:Product {id: $source_id})
-                            MERGE (b:Product {id: $target_id})
-                            MERGE (a)-[r:BOUGHT_WITH]->(b)
-                            ON CREATE SET r.count = 1
-                            ON MATCH SET r.count = r.count + 1
-                            """,
-                            source_id=source_id,
-                            target_id=target_id,
-                        )
-
-
         return OrderResponse(
             order_id=order_id_val,
             customer_id=customer_id_val,
@@ -186,31 +152,11 @@ class DBAccess:
             items=order_items_response,
         )
 
-
     def get_product(self, product_id: int) -> ProductResponse | None:
-        cache_key = f"product:{product_id}"
-
-        if self._redis:
-            cached = self._redis.get(cache_key)
-            if cached:
-                import json
-                return ProductResponse(**json.loads(cached))
-
         doc = self._mongo_db["product_catalog"].find_one({"id": product_id})
         if not doc:
             return None
-
-        product = self._product_doc_to_response(doc)
-
-        if self._redis:
-            import json
-            self._redis.setex(
-                cache_key,
-                60,
-                json.dumps(product.model_dump()),
-            )
-
-        return product
+        return self._product_doc_to_response(doc)
 
     def search_products(
         self,
@@ -288,122 +234,15 @@ class DBAccess:
     # ── Phase 2 ───────────────────────────────────────────────────────────────
 
     def invalidate_product_cache(self, product_id: int) -> None:
-        if not self._redis:
-            return
-
-        key = f"product:{product_id}"
-        self._redis.delete(key)
+        raise NotImplementedError("Phase 2: implement invalidate_product_cache")
 
     def record_product_view(self, customer_id: int, product_id: int) -> None:
-        if not self._redis:
-            return
-
-        key = f"recently_viewed:{customer_id}"
-
-        # הכנס לראש הרשימה (המוצר האחרון ראשון)
-        self._redis.lpush(key, product_id)
-
-        # שמור רק 10 מוצרים אחרונים
-        self._redis.ltrim(key, 0, 9)
+        raise NotImplementedError("Phase 2: implement record_product_view")
 
     def get_recently_viewed(self, customer_id: int) -> list[int]:
-        if not self._redis:
-            return []
+        raise NotImplementedError("Phase 2: implement get_recently_viewed")
 
-        key = f"recently_viewed:{customer_id}"
-        product_ids = self._redis.lrange(key, 0, -1)
-
-        # המרה ל-int
-        return [int(pid) for pid in product_ids]
-        
     # ── Phase 3 ───────────────────────────────────────────────────────────────
 
-
-    def build_graph_from_orders(self) -> None:
-        if self._neo4j is None:
-            raise RuntimeError("Neo4j driver is not configured")
-
-        with self._pg_session_factory() as session:
-            orders = session.execute(
-                select(Order.id).distinct().join(OrderItem)
-            ).scalars().all()
-
-            with self._neo4j.session() as neo_session:
-                for order_id in orders:
-                    items = session.execute(
-                        select(OrderItem.product_id)
-                        .where(OrderItem.order_id == order_id)
-                    ).scalars().all()
-
-                    # prevent duplicates and self-links
-                    items = sorted(set(items))
-
-                    for p1, p2 in combinations(items, 2):
-                        neo_session.run(
-                            """
-                            MERGE (a:Product {id: $p1})
-                            MERGE (b:Product {id: $p2})
-                            MERGE (a)-[:BOUGHT_WITH]->(b)
-                            MERGE (b)-[:BOUGHT_WITH]->(a)
-                            """,
-                            p1=p1,
-                            p2=p2,
-                        )
-
     def get_recommendations(self, product_id: int, limit: int = 5) -> list[RecommendationResponse]:
-        if self._neo4j is None:
-            raise RuntimeError("Neo4j driver is not configured")
-
-        with self._neo4j.session() as neo_session:
-            result = neo_session.run(
-                """
-                MATCH (:Product {id: $product_id})-[rel:BOUGHT_WITH]->(rec:Product)
-                RETURN rec.id AS product_id, rel.count AS score
-                ORDER BY score DESC, product_id ASC
-                LIMIT $limit
-                """,
-                product_id=product_id,
-                limit=limit,
-            )
-            rows = result.data()
-
-        if not rows:
-            return []
-
-        recommended_ids = [row["product_id"] for row in rows]
-        score_by_product_id = {row["product_id"]: row["score"] for row in rows}
-
-        with self._pg_session_factory() as session:
-            products = session.execute(
-                select(Product).where(Product.id.in_(recommended_ids))
-            ).scalars().all()
-
-            products_by_id = {product.id: product for product in products}
-
-            recommendations = []
-            for recommended_id in recommended_ids:
-                product = products_by_id.get(recommended_id)
-                if product is None:
-                    continue
-
-                recommendations.append(
-                    RecommendationResponse(
-                        product_id=product.id,
-                        name=product.name,
-                        score=score_by_product_id[recommended_id],
-                    )
-                )
-
-            return recommendations
-
-
-
-
-
-
-
-
-
-
-
-
+        raise NotImplementedError("Phase 3: implement get_recommendations")

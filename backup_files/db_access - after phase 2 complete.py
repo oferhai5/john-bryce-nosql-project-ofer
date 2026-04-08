@@ -1,12 +1,7 @@
 from __future__ import annotations
 
-from sqlalchemy import select
-from ecommerce_pipeline.postgres_models import Product
-from ecommerce_pipeline.models.responses import RecommendationResponse
-
 import logging
 from decimal import Decimal
-from itertools import combinations
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
@@ -155,28 +150,6 @@ class DBAccess:
         except Exception:
             logger.exception("Failed to save order snapshot for order_id=%s", order_id_val)
 
-        if self._neo4j is not None:
-            product_ids = [item.product_id for item in items]
-
-            with self._neo4j.session() as neo_session:
-                for i, source_id in enumerate(product_ids):
-                    for j, target_id in enumerate(product_ids):
-                        if i == j:
-                            continue
-
-                        neo_session.run(
-                            """
-                            MERGE (a:Product {id: $source_id})
-                            MERGE (b:Product {id: $target_id})
-                            MERGE (a)-[r:BOUGHT_WITH]->(b)
-                            ON CREATE SET r.count = 1
-                            ON MATCH SET r.count = r.count + 1
-                            """,
-                            source_id=source_id,
-                            target_id=target_id,
-                        )
-
-
         return OrderResponse(
             order_id=order_id_val,
             customer_id=customer_id_val,
@@ -185,7 +158,6 @@ class DBAccess:
             created_at=created_at_str,
             items=order_items_response,
         )
-
 
     def get_product(self, product_id: int) -> ProductResponse | None:
         cache_key = f"product:{product_id}"
@@ -318,92 +290,5 @@ class DBAccess:
         
     # ── Phase 3 ───────────────────────────────────────────────────────────────
 
-
-    def build_graph_from_orders(self) -> None:
-        if self._neo4j is None:
-            raise RuntimeError("Neo4j driver is not configured")
-
-        with self._pg_session_factory() as session:
-            orders = session.execute(
-                select(Order.id).distinct().join(OrderItem)
-            ).scalars().all()
-
-            with self._neo4j.session() as neo_session:
-                for order_id in orders:
-                    items = session.execute(
-                        select(OrderItem.product_id)
-                        .where(OrderItem.order_id == order_id)
-                    ).scalars().all()
-
-                    # prevent duplicates and self-links
-                    items = sorted(set(items))
-
-                    for p1, p2 in combinations(items, 2):
-                        neo_session.run(
-                            """
-                            MERGE (a:Product {id: $p1})
-                            MERGE (b:Product {id: $p2})
-                            MERGE (a)-[:BOUGHT_WITH]->(b)
-                            MERGE (b)-[:BOUGHT_WITH]->(a)
-                            """,
-                            p1=p1,
-                            p2=p2,
-                        )
-
     def get_recommendations(self, product_id: int, limit: int = 5) -> list[RecommendationResponse]:
-        if self._neo4j is None:
-            raise RuntimeError("Neo4j driver is not configured")
-
-        with self._neo4j.session() as neo_session:
-            result = neo_session.run(
-                """
-                MATCH (:Product {id: $product_id})-[rel:BOUGHT_WITH]->(rec:Product)
-                RETURN rec.id AS product_id, rel.count AS score
-                ORDER BY score DESC, product_id ASC
-                LIMIT $limit
-                """,
-                product_id=product_id,
-                limit=limit,
-            )
-            rows = result.data()
-
-        if not rows:
-            return []
-
-        recommended_ids = [row["product_id"] for row in rows]
-        score_by_product_id = {row["product_id"]: row["score"] for row in rows}
-
-        with self._pg_session_factory() as session:
-            products = session.execute(
-                select(Product).where(Product.id.in_(recommended_ids))
-            ).scalars().all()
-
-            products_by_id = {product.id: product for product in products}
-
-            recommendations = []
-            for recommended_id in recommended_ids:
-                product = products_by_id.get(recommended_id)
-                if product is None:
-                    continue
-
-                recommendations.append(
-                    RecommendationResponse(
-                        product_id=product.id,
-                        name=product.name,
-                        score=score_by_product_id[recommended_id],
-                    )
-                )
-
-            return recommendations
-
-
-
-
-
-
-
-
-
-
-
-
+        raise NotImplementedError("Phase 3: implement get_recommendations")
