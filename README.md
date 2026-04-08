@@ -2,12 +2,12 @@
 
 This project fully implements the E-Commerce Polyglot Data Pipeline.
 
-### ✔ Completed Phases:
+###  Completed Phases:
 - Phase 1 – PostgreSQL + MongoDB
 - Phase 2 – Redis (caching, inventory, recently viewed)
 - Phase 3 – Neo4j (recommendations graph)
 
-### 🚀 How to Run:
+###  How to Run:
 
 ```bash
 docker compose up -d
@@ -22,6 +22,8 @@ uv run pytest
 The web API is fully wired up and running. **Your job is to implement the data access layer** -- the `DBAccess` class in `src/ecommerce_pipeline/db_access.py`.
 
 ---
+
+
 
 
 
